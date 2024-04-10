@@ -22,7 +22,7 @@
 		podDisruptive: true
 	}
 	description: "database instance"
-	type:        "component"
+	type:        "componen"
 }
 template: {
 	output: {
