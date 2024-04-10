@@ -124,6 +124,41 @@ function runVelaVet(document: vscode.TextDocument): Promise<string> {
   });
 }
 
+function determineKeyword(problem: string): string | undefined {
+  const regexes = [
+    // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid type trit
+    /invalid type (.+)/,
+    // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: cannot unmarshal number into Go struct field TraitDefinitionSpec.podDisruptive of type bool
+    // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: cannot unmarshal number into Go struct field WorkloadTypeDescriptor.workload.type of type string
+    /field [\w\.]+\.+(\w+) of type/,
+    // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: test2.attributes.podDisruptive: reference "tru" not found
+    /reference \"(.+)\" not found/,
+    // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: unknown field "podDisruptive"
+    /unknown field "(.+)"/
+  ];
+
+  for (const regex of regexes) {
+    const match = problem.match(regex);
+
+    if (match && match.length > 0) {
+      return match.slice(-1)[0];
+    }
+  }
+}
+
+function findRange(document: vscode.TextDocument, keyword: string | undefined): vscode.Range {
+  if (!keyword) {
+    return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(document.lineCount, 0));
+  }
+
+  const startOffset = document.getText().indexOf(keyword);
+  const endOffset = startOffset + keyword.length;
+  return new vscode.Range(
+    document.positionAt(startOffset),
+    document.positionAt(endOffset)
+  );
+}
+
 function updateDiagnostics(document: vscode.TextDocument, collection: vscode.DiagnosticCollection): void {
 
   if (document && path.basename(document.uri.fsPath).endsWith('.cue')) {
@@ -134,7 +169,12 @@ function updateDiagnostics(document: vscode.TextDocument, collection: vscode.Dia
       collection.clear();
     }).catch((problem) => {
 
-      const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(document.lineCount, 0));
+      console.debug(problem);
+
+      const keyword = determineKeyword(problem);
+      console.debug(keyword);
+
+      const range = findRange(document, keyword);
 
       collection.set(document.uri, [{
         message: problem,
