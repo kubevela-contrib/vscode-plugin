@@ -1,7 +1,6 @@
 import { ExtensionContext, languages, Disposable, workspace, window } from 'vscode';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { spawn } from 'child_process';
 
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { CueVetDiagnosticsProvider } from './CueVetDiagnosticsProvider';
@@ -9,24 +8,11 @@ import { VelaVetDiagnosticsProvider } from './VelaVetDiagnosticsProvider';
 
 let disposables: Disposable[] = [];
 
-function runCommand(command: string): Promise<string> {
-  const process = spawn(command, { shell: true });
-
-  return new Promise((resolve, reject) => {
-    process.stdout.on('data', (data) => {
-      resolve(data.toString());
-    });
-
-    process.stderr.on('data', (data) => {
-      reject(data.toString());
-    });
-  });
-}
 
 async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider): Promise<void> {
   if (document && path.basename(document.uri.fsPath).endsWith('.cue')) {
     try {
-      await runCommand(diagnosticProvider.resolveCommand(document.fileName));
+      await diagnosticProvider.runCommand(document);
       diagnosticProvider.getCollection().clear();
     } catch (problem) {
       console.debug(problem);
@@ -38,7 +24,7 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
         message: coreProblem,
         range,
         severity: vscode.DiagnosticSeverity.Error,
-        source: '',
+        source: diagnosticProvider.getName(),
         relatedInformation: [
           new vscode.DiagnosticRelatedInformation(new vscode.Location(document.uri, range), coreProblem)
         ]
@@ -49,12 +35,15 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
   }
 }
 
-export function activate(context: ExtensionContext) {
-  const diagnosticProviders: DiagnosticProvider[] = [
-    new VelaVetDiagnosticsProvider(languages.createDiagnosticCollection('vela vet')),
-    new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'))
-  ];
+const diagnosticProviders: DiagnosticProvider[] = [
+  new VelaVetDiagnosticsProvider(languages.createDiagnosticCollection('vela vet')),
+  new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'))
+];
 
+export function activate(context: ExtensionContext) {
+  for (const provider of diagnosticProviders) {
+    provider.activate();
+  }
 
   if (window.activeTextEditor) {
     for (const provider of diagnosticProviders) {
@@ -85,4 +74,8 @@ export function deactivate() {
     disposables.forEach(item => item.dispose());
   }
   disposables = [];
+
+  for (const provider of diagnosticProviders) {
+    provider.deactivate();
+  }
 }

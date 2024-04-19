@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
+import { spawn } from 'child_process';
 
 export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
@@ -8,12 +9,36 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         this.collection = collection;
     }
 
+    activate(): void {
+
+    }
+
+    deactivate(): void {
+
+    }
+
+    getName(): string {
+        return 'vela';
+    }
+
     getCollection(): vscode.DiagnosticCollection {
         return this.collection;
     }
 
-    resolveCommand(filepath: string): string {
-        return `vela def vet ${filepath}`;
+    runCommand(document: vscode.TextDocument): Promise<string> {
+        const command = `vela def vet ${document.fileName}`;
+
+        const process = spawn(command, { shell: true });
+
+        return new Promise((resolve, reject) => {
+            process.stdout.on('data', (data) => {
+                resolve(data.toString());
+            });
+
+            process.stderr.on('data', (data) => {
+                reject(data.toString());
+            });
+        });
     }
 
     findRange(document: vscode.TextDocument, problem: string): vscode.Range {

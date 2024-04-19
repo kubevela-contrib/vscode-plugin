@@ -1,19 +1,105 @@
 import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
+import { spawn } from 'child_process';
+import { writeFileSync } from 'fs';
+import { mkdtempSync, rmdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'crypto';
 
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
 
+    private mockContext = `#Context: {
+        appRevision:    string
+        appRevisionNum: int
+        appName:        string
+        name:           string
+        namespace:      string
+        output:         _
+    }
+    
+    context: #Context & {
+        appRevision:    "v1"
+        appRevisionNum: 1
+        appName:        "dummy-app-name"
+        name:           "dummy-name"
+        namespace:      "dummy-namespace"
+        output:         {}
+    }`;
+    private mockContextLines = (this.mockContext.match(/\n/g) || '').length + 1;
+
+    private tempDirectory: string | undefined;
+
     constructor(collection: vscode.DiagnosticCollection) {
         this.collection = collection;
+    }
+
+    activate(): void {
+        const directory = mkdtempSync(join(tmpdir(), 'vela-vscode-extension-'));
+        console.log(directory);
+        this.tempDirectory = directory;
+    }
+
+    deactivate(): void {
+        if (this.tempDirectory) {
+            rmdirSync(this.tempDirectory);
+        }
+    }
+
+    getName(): string {
+        return 'cue';
+    }
+
+    // This is a temporary measure to supress certain messages until all of the data injected by Kubevela controller can be mocked.
+    // So far only context has been mocked.
+    private shouldTemporarilyIgnore(problem: string): boolean {
+        const regexes = [
+            // some instances are incomplete; use the -c flag to show errors or suppress this message
+            /some instances are incomplete/,
+            // template.output.metadata.name: reference "parameter" not found
+            /reference "parameter" not found/
+        ];
+
+        for (const regex of regexes) {
+            const match = problem.match(regex);
+            if (match !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     getCollection(): vscode.DiagnosticCollection {
         return this.collection;
     }
 
-    resolveCommand(filepath: string): string {
-        return `cue vet ${filepath}`;
+    runCommand(document: vscode.TextDocument): Promise<string> {
+        const tempFileContent = this.mockContext.concat('\n').concat(document.getText());
+
+        const fileName = `${randomBytes(16).toString("hex")}.cue`;
+
+        writeFileSync(`${this.tempDirectory}/${fileName}`, tempFileContent);
+
+        const command = `cue vet ${this.tempDirectory}/${fileName}`;
+
+        const process = spawn(command, { shell: true });
+
+        return new Promise((resolve, reject) => {
+            process.stdout.on('data', (data) => {
+                resolve(data.toString());
+            });
+
+            process.stderr.on('data', (data) => {
+                const problem = data.toString();
+                if (this.shouldTemporarilyIgnore(problem)) {
+                    resolve(problem);
+                } else {
+                    reject(problem);
+                }
+            });
+        });
     }
 
     findRange(document: vscode.TextDocument, problem: string): vscode.Range {
@@ -22,7 +108,9 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         const lineAndColumn = problem.match(/(.+)\:(\d+)\:(\d+)\n?$/)?.slice(2).map(val => parseInt(val, 10) - 1);
 
         if (lineAndColumn?.length == 2) {
-            const [line, column] = lineAndColumn;
+            let [line, column] = lineAndColumn;
+            line = line - this.mockContextLines;
+
             return new vscode.Range(
                 new vscode.Position(line, column),
                 document.positionAt(document.offsetAt(new vscode.Position(line + 1, 0)) - 1)
