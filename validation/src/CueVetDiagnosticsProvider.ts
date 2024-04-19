@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
-import { writeFileSync } from 'fs';
-import { mkdtempSync, rmdirSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'crypto';
@@ -42,7 +41,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
     deactivate(): void {
         if (this.tempDirectory) {
-            rmdirSync(this.tempDirectory);
+            rmSync(this.tempDirectory, { recursive: true });
         }
     }
 
