@@ -21,6 +21,10 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         return 'vela';
     }
 
+    isApplicable(document: vscode.TextDocument): boolean {
+        return document.languageId === 'cue' && document.getText().includes('template:');
+    }
+
     getCollection(): vscode.DiagnosticCollection {
         return this.collection;
     }

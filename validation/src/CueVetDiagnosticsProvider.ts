@@ -41,6 +41,10 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return 'cue';
     }
 
+    isApplicable(document: vscode.TextDocument): boolean {
+        return document.languageId === 'cue';
+    }
+
     // This is a temporary measure to supress certain messages until all of the data injected by Kubevela controller can be mocked.
     // So far only context has been mocked.
     private shouldTemporarilyIgnore(problem: string): boolean {

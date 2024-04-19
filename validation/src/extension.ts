@@ -1,6 +1,5 @@
 import { ExtensionContext, languages, Disposable, workspace, window } from 'vscode';
 import * as vscode from 'vscode';
-import * as path from 'path';
 
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { CueVetDiagnosticsProvider } from './CueVetDiagnosticsProvider';
@@ -10,7 +9,7 @@ let disposables: Disposable[] = [];
 
 
 async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider): Promise<void> {
-  if (document && path.basename(document.uri.fsPath).endsWith('.cue')) {
+  if (diagnosticProvider.isApplicable(document)) {
     try {
       await diagnosticProvider.runCommand(document);
       diagnosticProvider.getCollection().clear();
