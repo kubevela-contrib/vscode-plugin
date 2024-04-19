@@ -32,6 +32,6 @@ template: {
 
 	}
 	parameter: {
-		foo: boo
+		foo: bool
 	}
 }

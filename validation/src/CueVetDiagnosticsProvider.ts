@@ -27,7 +27,6 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         namespace:      "dummy-namespace"
         output:         {}
     }`;
-    private mockContextLines = (this.mockContext.match(/\n/g) || '').length + 1;
 
     private tempDirectory: string | undefined;
 
@@ -76,7 +75,8 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     }
 
     runCommand(document: vscode.TextDocument): Promise<string> {
-        const tempFileContent = this.mockContext.concat('\n').concat(document.getText());
+        // This aims to replicate the technique suggested in https://kubevela-docs.oss-cn-beijing.aliyuncs.com/docs/v1.0/platform-engineers/debug-test-cue#debug-cue-template
+        const tempFileContent = document.getText().concat('\n').concat(this.mockContext);
 
         const fileName = `${randomBytes(16).toString("hex")}.cue`;
 
@@ -109,7 +109,6 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
         if (lineAndColumn?.length == 2) {
             let [line, column] = lineAndColumn;
-            line = line - this.mockContextLines;
 
             return new vscode.Range(
                 new vscode.Position(line, column),
