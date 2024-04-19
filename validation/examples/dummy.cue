@@ -28,7 +28,7 @@ template: {
 	output: {
 
 	}
-	// parameter: {
-
-	// }
+	parameter: {
+		foo: boo
+	}
 }
