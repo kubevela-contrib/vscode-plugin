@@ -46,14 +46,13 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private shouldTemporarilyIgnore(problem: string): boolean {
         const regexes = [
             // some instances are incomplete; use the -c flag to show errors or suppress this message
-            /some instances are incomplete/,
-            // template.output.metadata.name: reference "parameter" not found
-            /reference "parameter" not found/
+            /some instances are incomplete/
         ];
 
         for (const regex of regexes) {
             const match = problem.match(regex);
             if (match !== null) {
+                console.debug(`excluding ${match}`)
                 return true;
             }
         }
