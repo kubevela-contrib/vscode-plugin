@@ -17,15 +17,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         namespace:      string
         output:         _
     }
-    
-    context: #Context & {
-        appRevision:    "v1"
-        appRevisionNum: 1
-        appName:        "dummy-app-name"
-        name:           "dummy-name"
-        namespace:      "dummy-namespace"
-        output:         {}
-    }`;
+    context: #Context`;
 
     private tempDirectory: string | undefined;
 
