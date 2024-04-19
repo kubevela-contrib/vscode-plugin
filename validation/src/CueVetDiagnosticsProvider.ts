@@ -115,6 +115,5 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         // into
         // template.parameter.foo: reference "boo" not found
         return problem.replace(/\:\n(.+)/, '');
-        // return problem
     }
 }
