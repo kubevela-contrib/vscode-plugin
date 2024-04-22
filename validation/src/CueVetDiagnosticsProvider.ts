@@ -16,6 +16,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         name:           string
         namespace:      string
         output:         _
+        outputs:        _
     }
     context: #Context`;
 
