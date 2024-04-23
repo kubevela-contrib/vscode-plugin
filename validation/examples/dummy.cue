@@ -25,10 +25,13 @@
 	type:        "componen"
 }
 template: {
+	_metadata: {
+		foo: context.names
+	}
 	output: {
 
 	}
-	// parameter: {
-
-	// }
+	parameter: {
+		foo: bool
+	}
 }
