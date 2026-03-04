@@ -17,8 +17,8 @@ function getK8sContext(): string {
     }
 }
 
-function buildSchemaUri(context: string): string {
-    return `${SCHEMA_ID}://schema/KubeVela Application | Cluster ${context}`;
+function buildSchemaUri(context: string, version: number): string {
+    return `${SCHEMA_ID}://schema/${version}/KubeVela Application | Cluster ${context}`;
 }
 
 const OAM_API_VERSION = 'core.oam.dev/v1beta1';
@@ -67,7 +67,30 @@ async function kubectlAsync(args: string): Promise<string> {
 
 type JsonObject = Record<string, unknown>;
 
-function parseApplicationSchema(crdJson: string): JsonObject {
+const METADATA_RUNTIME_FIELDS = [
+    'creationTimestamp', 'deletionGracePeriodSeconds', 'deletionTimestamp',
+    'finalizers', 'generation', 'managedFields', 'ownerReferences',
+    'resourceVersion', 'selfLink', 'uid',
+];
+
+function parseObjectMeta(openApiJson: string): JsonObject {
+    const spec = JSON.parse(openApiJson);
+    const key = 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta';
+    const meta = spec.components?.schemas?.[key] ?? spec.definitions?.[key];
+    if (!meta) {
+        throw new Error('ObjectMeta not found in OpenAPI spec');
+    }
+    const props = meta.properties;
+    if (props) {
+        for (const field of METADATA_RUNTIME_FIELDS) {
+            delete props[field];
+        }
+    }
+    delete meta.required;
+    return meta;
+}
+
+function parseApplicationSchema(crdJson: string, objectMeta: JsonObject): JsonObject {
     const crd = JSON.parse(crdJson);
     const versions = crd.spec.versions as Array<{ name: string; schema?: { openAPIV3Schema?: JsonObject } }>;
     const latest = versions[versions.length - 1];
@@ -78,6 +101,7 @@ function parseApplicationSchema(crdJson: string): JsonObject {
     const props = (openAPISchema as any).properties;
     if (props) {
         delete props.status;
+        props.metadata = objectMeta;
     }
     return openAPISchema;
 }
@@ -200,6 +224,7 @@ function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObjec
 
 export class VelaYamlSchemaProvider {
     private schemaContent: string | undefined;
+    private schemaVersion = 0;
     private refreshing = false;
     private cachePath: string;
 
@@ -274,7 +299,8 @@ export class VelaYamlSchemaProvider {
     }
 
     private fetchSchemaFromClusterSync(): void {
-        const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'));
+        const objectMeta = parseObjectMeta(kubectlSync('get --raw /openapi/v3/api/v1'));
+        const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'), objectMeta);
         const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
         const componentDescs = parseDefinitionDescriptions(kubectlSync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
         const traitDescs = parseDefinitionDescriptions(kubectlSync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
@@ -298,7 +324,8 @@ export class VelaYamlSchemaProvider {
 
         (async () => {
             try {
-                const appSchema = parseApplicationSchema(await kubectlAsync('get crd applications.core.oam.dev -o json'));
+                const objectMeta = parseObjectMeta(await kubectlAsync('get --raw /openapi/v3/api/v1'));
+                const appSchema = parseApplicationSchema(await kubectlAsync('get crd applications.core.oam.dev -o json'), objectMeta);
                 const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
                 const componentDescs = parseDefinitionDescriptions(await kubectlAsync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
                 const traitDescs = parseDefinitionDescriptions(await kubectlAsync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
@@ -311,6 +338,7 @@ export class VelaYamlSchemaProvider {
                 const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
                 this.schemaContent = JSON.stringify(composed);
+                this.schemaVersion++;
                 this.writeCache(this.schemaContent);
             } catch (err) {
                 console.error('Failed to refresh schemas from cluster:', err);
@@ -332,7 +360,7 @@ export class VelaYamlSchemaProvider {
             : fs.readFileSync(uri.fsPath, 'utf-8');
 
         if (isVelaApplication(content)) {
-            return buildSchemaUri(getK8sContext());
+            return buildSchemaUri(getK8sContext(), this.schemaVersion);
         }
 
         return undefined;
