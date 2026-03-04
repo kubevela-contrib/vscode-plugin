@@ -75,6 +75,10 @@ function parseApplicationSchema(crdJson: string): JsonObject {
     if (!openAPISchema) {
         throw new Error('No openAPIV3Schema found in CRD');
     }
+    const props = (openAPISchema as any).properties;
+    if (props) {
+        delete props.status;
+    }
     return openAPISchema;
 }
 
