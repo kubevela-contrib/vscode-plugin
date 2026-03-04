@@ -97,15 +97,15 @@ function parseComponentSchema(name: string, cmJson: string): [string, JsonObject
     return undefined;
 }
 
-function stripDefaultsFromRequired(schema: unknown): unknown {
+function makeDefaultedFieldsOptional(schema: unknown): unknown {
     if (Array.isArray(schema)) {
-        return schema.map(item => stripDefaultsFromRequired(item));
+        return schema.map(item => makeDefaultedFieldsOptional(item));
     }
     if (schema !== null && typeof schema === 'object') {
         const obj = schema as JsonObject;
         const result: JsonObject = {};
         for (const [key, value] of Object.entries(obj)) {
-            result[key] = stripDefaultsFromRequired(value);
+            result[key] = makeDefaultedFieldsOptional(value);
         }
         const required = result['required'];
         const properties = result['properties'];
@@ -215,7 +215,7 @@ export class VelaYamlSchemaProvider {
                 componentSchemas.set(...entry);
             }
         }
-        const composed = stripDefaultsFromRequired(composeSchema(appSchema, componentSchemas)) as JsonObject;
+        const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, componentSchemas)) as JsonObject;
         composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
         this.schemaContent = JSON.stringify(composed);
         this.writeCache(this.schemaContent);
@@ -238,7 +238,7 @@ export class VelaYamlSchemaProvider {
                         componentSchemas.set(...entry);
                     }
                 }
-                const composed = stripDefaultsFromRequired(composeSchema(appSchema, componentSchemas)) as JsonObject;
+                const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, componentSchemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
                 this.schemaContent = JSON.stringify(composed);
                 this.writeCache(this.schemaContent);
