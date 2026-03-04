@@ -73,37 +73,35 @@ const METADATA_RUNTIME_FIELDS = [
     'resourceVersion', 'selfLink', 'uid',
 ];
 
-function parseObjectMeta(openApiJson: string): JsonObject {
-    const spec = JSON.parse(openApiJson);
-    const key = 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta';
-    const meta = spec.components?.schemas?.[key] ?? spec.definitions?.[key];
-    if (!meta) {
-        throw new Error('ObjectMeta not found in OpenAPI spec');
-    }
-    const props = meta.properties;
-    if (props) {
-        for (const field of METADATA_RUNTIME_FIELDS) {
-            delete props[field];
-        }
-    }
-    delete meta.required;
-    return meta;
-}
+function parseApplicationSchema(oamOpenApiJson: string): JsonObject {
+    const spec = JSON.parse(oamOpenApiJson);
+    const schemas = spec.components?.schemas ?? {};
 
-function parseApplicationSchema(crdJson: string, objectMeta: JsonObject): JsonObject {
-    const crd = JSON.parse(crdJson);
-    const versions = crd.spec.versions as Array<{ name: string; schema?: { openAPIV3Schema?: JsonObject } }>;
-    const latest = versions[versions.length - 1];
-    const openAPISchema = latest?.schema?.openAPIV3Schema;
-    if (!openAPISchema) {
-        throw new Error('No openAPIV3Schema found in CRD');
+    const app = schemas['dev.oam.core.v1beta1.Application'];
+    if (!app) {
+        throw new Error('Application schema not found in OAM OpenAPI spec');
     }
-    const props = (openAPISchema as any).properties;
+
+    const meta = schemas['io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta'];
+    if (meta) {
+        const metaProps = meta.properties;
+        if (metaProps) {
+            for (const field of METADATA_RUNTIME_FIELDS) {
+                delete metaProps[field];
+            }
+        }
+        delete meta.required;
+    }
+
+    const props = app.properties;
     if (props) {
         delete props.status;
-        props.metadata = objectMeta;
+        if (meta) {
+            props.metadata = meta;
+        }
     }
-    return openAPISchema;
+
+    return app;
 }
 
 function filterConfigMapNames(nameListOutput: string, prefix: string): string[] {
@@ -113,16 +111,33 @@ function filterConfigMapNames(nameListOutput: string, prefix: string): string[] 
         .filter(n => !/-v\d+$/.test(n));
 }
 
-function parseDefinitionDescriptions(definitionsJson: string): Map<string, string> {
-    const descriptions = new Map<string, string>();
-    const items = JSON.parse(definitionsJson).items as Array<{ metadata: { name: string; annotations?: Record<string, string> } }>;
+interface DescriptionsByKind {
+    components: Map<string, string>;
+    traits: Map<string, string>;
+    policies: Map<string, string>;
+}
+
+const DEFINITION_KIND_TO_KEY: Record<string, keyof DescriptionsByKind> = {
+    ComponentDefinition: 'components',
+    TraitDefinition: 'traits',
+    PolicyDefinition: 'policies',
+};
+
+function parseDefinitionDescriptions(definitionsJson: string): DescriptionsByKind {
+    const result: DescriptionsByKind = {
+        components: new Map(),
+        traits: new Map(),
+        policies: new Map(),
+    };
+    const items = JSON.parse(definitionsJson).items as Array<{ kind: string; metadata: { name: string; annotations?: Record<string, string> } }>;
     for (const item of items) {
+        const key = DEFINITION_KIND_TO_KEY[item.kind];
         const desc = item.metadata.annotations?.['definition.oam.dev/description'];
-        if (desc) {
-            descriptions.set(item.metadata.name, desc);
+        if (key && desc) {
+            result[key].set(item.metadata.name, desc);
         }
     }
-    return descriptions;
+    return result;
 }
 
 function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [string, JsonObject] | undefined {
@@ -299,16 +314,13 @@ export class VelaYamlSchemaProvider {
     }
 
     private fetchSchemaFromClusterSync(): void {
-        const objectMeta = parseObjectMeta(kubectlSync('get --raw /openapi/v3/api/v1'));
-        const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'), objectMeta);
+        const appSchema = parseApplicationSchema(kubectlSync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
         const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
-        const componentDescs = parseDefinitionDescriptions(kubectlSync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
-        const traitDescs = parseDefinitionDescriptions(kubectlSync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
-        const policyDescs = parseDefinitionDescriptions(kubectlSync('get policydefinitions.core.oam.dev -n vela-system -o json'));
+        const descs = parseDefinitionDescriptions(kubectlSync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
         const schemas: SchemasByKind = {
-            components: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), descriptions: componentDescs },
-            traits: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), descriptions: traitDescs },
-            policies: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), descriptions: policyDescs },
+            components: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), descriptions: descs.components },
+            traits: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), descriptions: descs.traits },
+            policies: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), descriptions: descs.policies },
         };
         const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
         composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
@@ -324,16 +336,13 @@ export class VelaYamlSchemaProvider {
 
         (async () => {
             try {
-                const objectMeta = parseObjectMeta(await kubectlAsync('get --raw /openapi/v3/api/v1'));
-                const appSchema = parseApplicationSchema(await kubectlAsync('get crd applications.core.oam.dev -o json'), objectMeta);
+                const appSchema = parseApplicationSchema(await kubectlAsync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
                 const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
-                const componentDescs = parseDefinitionDescriptions(await kubectlAsync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
-                const traitDescs = parseDefinitionDescriptions(await kubectlAsync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
-                const policyDescs = parseDefinitionDescriptions(await kubectlAsync('get policydefinitions.core.oam.dev -n vela-system -o json'));
+                const descs = parseDefinitionDescriptions(await kubectlAsync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
                 const schemas: SchemasByKind = {
-                    components: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), descriptions: componentDescs },
-                    traits: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), descriptions: traitDescs },
-                    policies: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), descriptions: policyDescs },
+                    components: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), descriptions: descs.components },
+                    traits: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), descriptions: descs.traits },
+                    policies: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), descriptions: descs.policies },
                 };
                 const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
