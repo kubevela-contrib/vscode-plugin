@@ -82,21 +82,21 @@ function parseApplicationSchema(crdJson: string): JsonObject {
     return openAPISchema;
 }
 
-function filterComponentConfigMapNames(nameListOutput: string): string[] {
+function filterConfigMapNames(nameListOutput: string, prefix: string): string[] {
     return nameListOutput.trim().split('\n')
         .map(n => n.replace('configmap/', ''))
-        .filter(n => n.startsWith('component-schema-'))
+        .filter(n => n.startsWith(prefix))
         .filter(n => !/-v\d+$/.test(n));
 }
 
-function parseComponentSchema(name: string, cmJson: string): [string, JsonObject] | undefined {
+function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [string, JsonObject] | undefined {
     const cm = JSON.parse(cmJson);
-    const componentType = name.replace('component-schema-', '');
+    const type = name.replace(prefix, '');
     const data: Record<string, string> = cm.data ?? {};
     const schemaKey = Object.keys(data).find(k => k.endsWith('.json') || k === 'openapi-v3-json-schema');
     const schemaStr = schemaKey ? data[schemaKey] : Object.values(data)[0];
     if (schemaStr) {
-        return [componentType, JSON.parse(schemaStr)];
+        return [type, JSON.parse(schemaStr)];
     }
     return undefined;
 }
@@ -128,18 +128,21 @@ function makeDefaultedFieldsOptional(schema: unknown): unknown {
     return schema;
 }
 
-function composeSchema(appSchema: JsonObject, componentSchemas: Map<string, JsonObject>): JsonObject {
-    const spec = (appSchema as any).properties?.spec;
-    const components = spec?.properties?.components;
-    if (!components?.items) {
-        return appSchema;
-    }
+interface SchemasByKind {
+    components: Map<string, JsonObject>;
+    traits: Map<string, JsonObject>;
+    policies: Map<string, JsonObject>;
+}
 
+function injectAllOf(itemsNode: JsonObject | undefined, schemas: Map<string, JsonObject>): void {
+    if (!itemsNode || schemas.size === 0) {
+        return;
+    }
     const allOf: JsonObject[] = [];
-    for (const [componentType, schema] of componentSchemas) {
+    for (const [type, schema] of schemas) {
         allOf.push({
             if: {
-                properties: { type: { const: componentType } },
+                properties: { type: { const: type } },
                 required: ['type'],
             },
             then: {
@@ -147,11 +150,22 @@ function composeSchema(appSchema: JsonObject, componentSchemas: Map<string, Json
             },
         });
     }
+    itemsNode.allOf = allOf;
+}
 
-    components.items = {
-        ...components.items,
-        allOf,
-    };
+function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObject {
+    const spec = (appSchema as any).properties?.spec;
+    const componentItems = spec?.properties?.components?.items;
+
+    injectAllOf(componentItems, schemas.components);
+    injectAllOf(componentItems?.properties?.traits?.items, schemas.traits);
+    injectAllOf(spec?.properties?.policies?.items, schemas.policies);
+
+    console.log('composeSchema: components allOf count:', schemas.components.size);
+    console.log('composeSchema: traits allOf count:', schemas.traits.size);
+    console.log('composeSchema: policies allOf count:', schemas.policies.size);
+    console.log('composeSchema: traits items node exists:', !!componentItems?.properties?.traits?.items);
+    console.log('composeSchema: policies items node exists:', !!spec?.properties?.policies?.items);
 
     return appSchema;
 }
@@ -209,17 +223,37 @@ export class VelaYamlSchemaProvider {
         }
     }
 
-    private fetchSchemaFromClusterSync(): void {
-        const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'));
-        const cmNames = filterComponentConfigMapNames(kubectlSync('get configmaps -n vela-system -o name'));
-        const componentSchemas = new Map<string, JsonObject>();
-        for (const name of cmNames) {
-            const entry = parseComponentSchema(name, kubectlSync(`get configmap ${name} -n vela-system -o json`));
+    private fetchConfigMapSchemasSync(nameListOutput: string, prefix: string): Map<string, JsonObject> {
+        const schemas = new Map<string, JsonObject>();
+        for (const name of filterConfigMapNames(nameListOutput, prefix)) {
+            const entry = parseConfigMapSchema(name, prefix, kubectlSync(`get configmap ${name} -n vela-system -o json`));
             if (entry) {
-                componentSchemas.set(...entry);
+                schemas.set(...entry);
             }
         }
-        const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, componentSchemas)) as JsonObject;
+        return schemas;
+    }
+
+    private async fetchConfigMapSchemasAsync(nameListOutput: string, prefix: string): Promise<Map<string, JsonObject>> {
+        const schemas = new Map<string, JsonObject>();
+        for (const name of filterConfigMapNames(nameListOutput, prefix)) {
+            const entry = parseConfigMapSchema(name, prefix, await kubectlAsync(`get configmap ${name} -n vela-system -o json`));
+            if (entry) {
+                schemas.set(...entry);
+            }
+        }
+        return schemas;
+    }
+
+    private fetchSchemaFromClusterSync(): void {
+        const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'));
+        const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
+        const schemas: SchemasByKind = {
+            components: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'),
+            traits: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'),
+            policies: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'),
+        };
+        const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
         composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
         this.schemaContent = JSON.stringify(composed);
         this.writeCache(this.schemaContent);
@@ -234,15 +268,13 @@ export class VelaYamlSchemaProvider {
         (async () => {
             try {
                 const appSchema = parseApplicationSchema(await kubectlAsync('get crd applications.core.oam.dev -o json'));
-                const cmNames = filterComponentConfigMapNames(await kubectlAsync('get configmaps -n vela-system -o name'));
-                const componentSchemas = new Map<string, JsonObject>();
-                for (const name of cmNames) {
-                    const entry = parseComponentSchema(name, await kubectlAsync(`get configmap ${name} -n vela-system -o json`));
-                    if (entry) {
-                        componentSchemas.set(...entry);
-                    }
-                }
-                const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, componentSchemas)) as JsonObject;
+                const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
+                const schemas: SchemasByKind = {
+                    components: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'),
+                    traits: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'),
+                    policies: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'),
+                };
+                const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
                 this.schemaContent = JSON.stringify(composed);
                 this.writeCache(this.schemaContent);
