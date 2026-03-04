@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { CueVetDiagnosticsProvider } from './CueVetDiagnosticsProvider';
 import { VelaVetDiagnosticsProvider } from './VelaVetDiagnosticsProvider';
+import { VelaYamlSchemaProvider } from './VelaYamlSchemaProvider';
 
 let disposables: Disposable[] = [];
 
@@ -39,7 +40,10 @@ const diagnosticProviders: DiagnosticProvider[] = [
   new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'))
 ];
 
-export function activate(context: ExtensionContext) {
+export async function activate(context: ExtensionContext) {
+  const yamlSchemaProvider = new VelaYamlSchemaProvider(context.globalStorageUri.fsPath);
+  await yamlSchemaProvider.register();
+
   for (const provider of diagnosticProviders) {
     provider.activate();
   }
