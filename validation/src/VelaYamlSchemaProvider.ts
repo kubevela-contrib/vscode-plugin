@@ -89,6 +89,18 @@ function filterConfigMapNames(nameListOutput: string, prefix: string): string[] 
         .filter(n => !/-v\d+$/.test(n));
 }
 
+function parseDefinitionDescriptions(definitionsJson: string): Map<string, string> {
+    const descriptions = new Map<string, string>();
+    const items = JSON.parse(definitionsJson).items as Array<{ metadata: { name: string; annotations?: Record<string, string> } }>;
+    for (const item of items) {
+        const desc = item.metadata.annotations?.['definition.oam.dev/description'];
+        if (desc) {
+            descriptions.set(item.metadata.name, desc);
+        }
+    }
+    return descriptions;
+}
+
 function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [string, JsonObject] | undefined {
     const cm = JSON.parse(cmJson);
     const type = name.replace(prefix, '');
@@ -128,17 +140,23 @@ function makeDefaultedFieldsOptional(schema: unknown): unknown {
     return schema;
 }
 
-interface SchemasByKind {
-    components: Map<string, JsonObject>;
-    traits: Map<string, JsonObject>;
-    policies: Map<string, JsonObject>;
+interface DefinitionSchemas {
+    schemas: Map<string, JsonObject>;
+    descriptions: Map<string, string>;
 }
 
-function injectAllOf(itemsNode: JsonObject | undefined, schemas: Map<string, JsonObject>): void {
+interface SchemasByKind {
+    components: DefinitionSchemas;
+    traits: DefinitionSchemas;
+    policies: DefinitionSchemas;
+}
+
+function injectAllOf(itemsNode: JsonObject | undefined, { schemas, descriptions }: DefinitionSchemas): void {
     if (!itemsNode || schemas.size === 0) {
         return;
     }
     const allOf: JsonObject[] = [];
+    const typeOneOf: JsonObject[] = [];
     for (const [type, schema] of schemas) {
         allOf.push({
             if: {
@@ -149,8 +167,18 @@ function injectAllOf(itemsNode: JsonObject | undefined, schemas: Map<string, Jso
                 properties: { properties: schema },
             },
         });
+        const entry: JsonObject = { const: type };
+        const desc = descriptions.get(type);
+        if (desc) {
+            entry.description = desc;
+        }
+        typeOneOf.push(entry);
     }
     itemsNode.allOf = allOf;
+    const props = (itemsNode as any).properties;
+    if (props?.type) {
+        props.type = { ...props.type, oneOf: typeOneOf };
+    }
 }
 
 function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObject {
@@ -161,9 +189,9 @@ function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObjec
     injectAllOf(componentItems?.properties?.traits?.items, schemas.traits);
     injectAllOf(spec?.properties?.policies?.items, schemas.policies);
 
-    console.log('composeSchema: components allOf count:', schemas.components.size);
-    console.log('composeSchema: traits allOf count:', schemas.traits.size);
-    console.log('composeSchema: policies allOf count:', schemas.policies.size);
+    console.log('composeSchema: components allOf count:', schemas.components.schemas.size);
+    console.log('composeSchema: traits allOf count:', schemas.traits.schemas.size);
+    console.log('composeSchema: policies allOf count:', schemas.policies.schemas.size);
     console.log('composeSchema: traits items node exists:', !!componentItems?.properties?.traits?.items);
     console.log('composeSchema: policies items node exists:', !!spec?.properties?.policies?.items);
 
@@ -248,10 +276,13 @@ export class VelaYamlSchemaProvider {
     private fetchSchemaFromClusterSync(): void {
         const appSchema = parseApplicationSchema(kubectlSync('get crd applications.core.oam.dev -o json'));
         const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
+        const componentDescs = parseDefinitionDescriptions(kubectlSync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
+        const traitDescs = parseDefinitionDescriptions(kubectlSync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
+        const policyDescs = parseDefinitionDescriptions(kubectlSync('get policydefinitions.core.oam.dev -n vela-system -o json'));
         const schemas: SchemasByKind = {
-            components: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'),
-            traits: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'),
-            policies: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'),
+            components: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), descriptions: componentDescs },
+            traits: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), descriptions: traitDescs },
+            policies: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), descriptions: policyDescs },
         };
         const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
         composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
@@ -269,10 +300,13 @@ export class VelaYamlSchemaProvider {
             try {
                 const appSchema = parseApplicationSchema(await kubectlAsync('get crd applications.core.oam.dev -o json'));
                 const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
+                const componentDescs = parseDefinitionDescriptions(await kubectlAsync('get componentdefinitions.core.oam.dev -n vela-system -o json'));
+                const traitDescs = parseDefinitionDescriptions(await kubectlAsync('get traitdefinitions.core.oam.dev -n vela-system -o json'));
+                const policyDescs = parseDefinitionDescriptions(await kubectlAsync('get policydefinitions.core.oam.dev -n vela-system -o json'));
                 const schemas: SchemasByKind = {
-                    components: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'),
-                    traits: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'),
-                    policies: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'),
+                    components: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), descriptions: componentDescs },
+                    traits: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), descriptions: traitDescs },
+                    policies: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), descriptions: policyDescs },
                 };
                 const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
