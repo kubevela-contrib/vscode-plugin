@@ -12,9 +12,6 @@
   "categories": [
     "Other"
   ],
-  "extensionDependencies": [
-    "redhat.vscode-yaml"
-  ],
   "activationEvents": [
     "*"
   ],

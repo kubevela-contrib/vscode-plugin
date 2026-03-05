@@ -34,24 +34,31 @@ interface YamlExtensionApi {
 }
 
 function isVelaApplication(content: string): boolean {
-    const lines = content.split('\n').slice(0, 10);
     let hasApiVersion = false;
     let hasKind = false;
+    let contentLines = 0;
 
-    for (const line of lines) {
+    for (const line of content.split('\n')) {
         const trimmed = line.trim();
-        if (trimmed.startsWith('#')) {
+        if (trimmed === '' || trimmed.startsWith('#')) {
             continue;
         }
+        contentLines++;
         if (trimmed === `apiVersion: ${OAM_API_VERSION}`) {
             hasApiVersion = true;
         }
         if (trimmed === `kind: ${OAM_KIND}`) {
             hasKind = true;
         }
+        if (hasApiVersion && hasKind) {
+            return true;
+        }
+        if (contentLines >= 10) {
+            break;
+        }
     }
 
-    return hasApiVersion && hasKind;
+    return false;
 }
 
 const KUBECTL_OPTS = { timeout: 10_000, maxBuffer: 10 * 1024 * 1024 };
