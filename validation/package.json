@@ -13,7 +13,8 @@
     "Other"
   ],
   "activationEvents": [
-    "*"
+    "onLanguage:yaml",
+    "onLanguage:manifest-yaml"
   ],
   "main": "./out/extension",
   "contributes": {
