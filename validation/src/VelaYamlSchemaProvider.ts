@@ -241,6 +241,8 @@ function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObjec
     console.log('composeSchema: traits items node exists:', !!componentItems?.properties?.traits?.items);
     console.log('composeSchema: policies items node exists:', !!spec?.properties?.policies?.items);
 
+    appSchema.additionalProperties = false;
+
     return appSchema;
 }
 
