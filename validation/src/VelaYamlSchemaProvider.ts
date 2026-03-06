@@ -159,7 +159,9 @@ function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [st
     return undefined;
 }
 
-function makeDefaultedFieldsOptional(schema: unknown): unknown {
+const CONDITIONAL_SCHEMA_KEYS = new Set(['if', 'then', 'else']);
+
+function makeDefaultedFieldsOptional(schema: unknown, parentKey?: string): unknown {
     if (Array.isArray(schema)) {
         return schema.map(item => makeDefaultedFieldsOptional(item));
     }
@@ -167,18 +169,23 @@ function makeDefaultedFieldsOptional(schema: unknown): unknown {
         const obj = schema as JsonObject;
         const result: JsonObject = {};
         for (const [key, value] of Object.entries(obj)) {
-            result[key] = makeDefaultedFieldsOptional(value);
+            result[key] = makeDefaultedFieldsOptional(value, key);
         }
         const required = result['required'];
         const properties = result['properties'];
-        if (Array.isArray(required) && properties && typeof properties === 'object') {
-            const props = properties as JsonObject;
-            result['required'] = required.filter(field => {
-                const prop = props[field as string];
-                return !(prop && typeof prop === 'object' && 'default' in (prop as JsonObject));
-            });
-            if ((result['required'] as unknown[]).length === 0) {
-                delete result['required'];
+        if (properties && typeof properties === 'object') {
+            if (!('additionalProperties' in result) && !('allOf' in result) && !CONDITIONAL_SCHEMA_KEYS.has(parentKey!)) {
+                result['additionalProperties'] = false;
+            }
+            if (Array.isArray(required)) {
+                const props = properties as JsonObject;
+                result['required'] = required.filter(field => {
+                    const prop = props[field as string];
+                    return !(prop && typeof prop === 'object' && 'default' in (prop as JsonObject));
+                });
+                if ((result['required'] as unknown[]).length === 0) {
+                    delete result['required'];
+                }
             }
         }
         return result;
@@ -240,8 +247,6 @@ function composeSchema(appSchema: JsonObject, schemas: SchemasByKind): JsonObjec
     console.log('composeSchema: policies allOf count:', schemas.policies.schemas.size);
     console.log('composeSchema: traits items node exists:', !!componentItems?.properties?.traits?.items);
     console.log('composeSchema: policies items node exists:', !!spec?.properties?.policies?.items);
-
-    appSchema.additionalProperties = false;
 
     return appSchema;
 }
