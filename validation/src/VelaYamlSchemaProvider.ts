@@ -261,6 +261,9 @@ function removeIgnoredFields(schema: JsonObject, fields: string[]): JsonObject {
 
 function applyIgnoredFields(schemas: Map<string, JsonObject>, ignoredFields: Map<string, string[]>): Map<string, JsonObject> {
     if (ignoredFields.size === 0) { return schemas; }
+    if (!vscode.workspace.getConfiguration('velaValidation.definitions').get<boolean>('excludeIgnoredFields', true)) {
+        return schemas;
+    }
 
     const result = new Map<string, JsonObject>();
     for (const [name, schema] of schemas) {

@@ -18,26 +18,22 @@
   ],
   "main": "./out/extension",
   "contributes": {
-    "commands": [
+    "configuration": [
       {
-        "title": "Enable CodeLens",
-        "command": "codelens-sample.enableCodeLens",
-        "category": "CodeLens Sample"
+        "title": "Applications",
+        "properties": {}
       },
       {
-        "title": "Disable Codelens",
-        "command": "codelens-sample.disableCodeLens",
-        "category": "CodeLens Sample"
-      }
-    ],
-    "configuration": {
-      "properties": {
-        "codelens-sample.enableCodeLens": {
-          "type": "boolean",
-          "default": true
+        "title": "Definitions",
+        "properties": {
+          "velaValidation.definitions.excludeIgnoredFields": {
+            "type": "boolean",
+            "default": true,
+            "description": "Exclude fields annotated with // +ignore in CUE definitions from component, trait, and policy schemas."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
