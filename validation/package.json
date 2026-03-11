@@ -18,22 +18,17 @@
   ],
   "main": "./out/extension",
   "contributes": {
-    "configuration": [
-      {
-        "title": "Definitions",
-        "properties": {}
-      },
-      {
-        "title": "Applications",
-        "properties": {
-          "velaValidation.definitions.excludeIgnoredFields": {
-            "type": "boolean",
-            "default": true,
-            "description": "Exclude +ignore fields."
-          }
+    "configuration": {
+      "title": "Vela Validation",
+      "properties": {
+        "velaValidation.definitions.excludeIgnoredFields": {
+          "type": "boolean",
+          "default": true,
+          "description": "Exclude +ignore fields.",
+          "order": 0
         }
       }
-    ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
