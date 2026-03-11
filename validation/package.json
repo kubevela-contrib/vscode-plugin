@@ -21,7 +21,7 @@
     "configuration": {
       "title": "Vela Validation",
       "properties": {
-        "velaValidation.definitions.excludeIgnoredFields": {
+        "velaValidation.applications.excludeIgnoredFields": {
           "type": "boolean",
           "default": true,
           "description": "Exclude +ignore fields.",
