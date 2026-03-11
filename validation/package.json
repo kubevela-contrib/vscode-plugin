@@ -20,16 +20,16 @@
   "contributes": {
     "configuration": [
       {
-        "title": "Applications",
+        "title": "Definitions",
         "properties": {}
       },
       {
-        "title": "Definitions",
+        "title": "Applications",
         "properties": {
           "velaValidation.definitions.excludeIgnoredFields": {
             "type": "boolean",
             "default": true,
-            "description": "Exclude fields annotated with // +ignore in CUE definitions from component, trait, and policy schemas."
+            "description": "Exclude +ignore fields."
           }
         }
       }
