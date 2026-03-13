@@ -118,33 +118,112 @@ function filterConfigMapNames(nameListOutput: string, prefix: string): string[] 
         .filter(n => !/-v\d+$/.test(n));
 }
 
-interface DescriptionsByKind {
-    components: Map<string, string>;
-    traits: Map<string, string>;
-    policies: Map<string, string>;
+interface DefinitionData {
+    descriptions: Map<string, string>;
+    ignoredFields: Map<string, string[]>;
 }
 
-const DEFINITION_KIND_TO_KEY: Record<string, keyof DescriptionsByKind> = {
+interface DefinitionDataByKind {
+    components: DefinitionData;
+    traits: DefinitionData;
+    policies: DefinitionData;
+}
+
+const DEFINITION_KIND_TO_KEY: Record<string, keyof DefinitionDataByKind> = {
     ComponentDefinition: 'components',
     TraitDefinition: 'traits',
     PolicyDefinition: 'policies',
 };
 
-function parseDefinitionDescriptions(definitionsJson: string): DescriptionsByKind {
-    const result: DescriptionsByKind = {
-        components: new Map(),
-        traits: new Map(),
-        policies: new Map(),
+interface DefinitionItem {
+    kind: string;
+    metadata: { name: string; annotations?: Record<string, string> };
+    spec?: { schematic?: { cue?: { template?: string } } };
+}
+
+function parseDefinitions(definitionsJson: string): DefinitionDataByKind {
+    const result: DefinitionDataByKind = {
+        components: { descriptions: new Map(), ignoredFields: new Map() },
+        traits: { descriptions: new Map(), ignoredFields: new Map() },
+        policies: { descriptions: new Map(), ignoredFields: new Map() },
     };
-    const items = JSON.parse(definitionsJson).items as Array<{ kind: string; metadata: { name: string; annotations?: Record<string, string> } }>;
+    const items = JSON.parse(definitionsJson).items as DefinitionItem[];
     for (const item of items) {
         const key = DEFINITION_KIND_TO_KEY[item.kind];
+        if (!key) { continue; }
+
         const desc = item.metadata.annotations?.['definition.oam.dev/description'];
-        if (key && desc) {
-            result[key].set(item.metadata.name, desc);
+        if (desc) {
+            result[key].descriptions.set(item.metadata.name, desc);
+        }
+
+        const cueTemplate = item.spec?.schematic?.cue?.template;
+        if (cueTemplate) {
+            const ignored = parseIgnoredFields(cueTemplate);
+            if (ignored.length > 0) {
+                result[key].ignoredFields.set(item.metadata.name, ignored);
+            }
         }
     }
     return result;
+}
+
+function parseIgnoredFields(cueTemplate: string): string[] {
+    const ignored: string[] = [];
+    const lines = cueTemplate.split('\n');
+
+    let inParameter = false;
+    let depth = 0;
+    let paramDepth = -1;
+    let ignoreNext = false;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (!inParameter) {
+            if (/^parameter:\s*\{/.test(trimmed)) {
+                inParameter = true;
+                paramDepth = depth;
+                depth++;
+            }
+            continue;
+        }
+
+        // Track brace depth
+        for (const ch of trimmed) {
+            if (ch === '{') { depth++; }
+            if (ch === '}') { depth--; }
+        }
+
+        if (depth <= paramDepth) {
+            break; // exited parameter block
+        }
+
+        // Only look at the top level of parameter
+        if (depth !== paramDepth + 1) {
+            continue;
+        }
+
+        // Check for // +ignore on its own line
+        if (/^\/\/\s*\+ignore\b/.test(trimmed)) {
+            ignoreNext = true;
+            continue;
+        }
+
+        // Check for a field definition
+        const fieldMatch = trimmed.match(/^(\w+)\s*\??:/);
+        if (fieldMatch) {
+            // Trailing // +ignore on the same line
+            if (/\/\/\s*\+ignore\b/.test(trimmed)) {
+                ignored.push(fieldMatch[1]);
+            } else if (ignoreNext) {
+                ignored.push(fieldMatch[1]);
+            }
+            ignoreNext = false;
+        }
+    }
+
+    return ignored;
 }
 
 function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [string, JsonObject] | undefined {
@@ -157,6 +236,41 @@ function parseConfigMapSchema(name: string, prefix: string, cmJson: string): [st
         return [type, JSON.parse(schemaStr)];
     }
     return undefined;
+}
+
+function removeIgnoredFields(schema: JsonObject, fields: string[]): JsonObject {
+    if (fields.length === 0) { return schema; }
+
+    const result = { ...schema };
+    const props = result.properties as JsonObject | undefined;
+    if (props) {
+        result.properties = { ...props };
+        for (const field of fields) {
+            delete (result.properties as JsonObject)[field];
+        }
+    }
+    const required = result.required as string[] | undefined;
+    if (required) {
+        result.required = required.filter(f => !fields.includes(f));
+        if ((result.required as string[]).length === 0) {
+            delete result.required;
+        }
+    }
+    return result;
+}
+
+function applyIgnoredFields(schemas: Map<string, JsonObject>, ignoredFields: Map<string, string[]>): Map<string, JsonObject> {
+    if (ignoredFields.size === 0) { return schemas; }
+    if (!vscode.workspace.getConfiguration('velaValidation.applications').get<boolean>('excludeIgnoredFields', true)) {
+        return schemas;
+    }
+
+    const result = new Map<string, JsonObject>();
+    for (const [name, schema] of schemas) {
+        const fields = ignoredFields.get(name);
+        result.set(name, fields ? removeIgnoredFields(schema, fields) : schema);
+    }
+    return result;
 }
 
 const CONDITIONAL_SCHEMA_KEYS = new Set(['if', 'then', 'else']);
@@ -330,11 +444,11 @@ export class VelaYamlSchemaProvider {
     private fetchSchemaFromClusterSync(): void {
         const appSchema = parseApplicationSchema(kubectlSync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
         const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
-        const descs = parseDefinitionDescriptions(kubectlSync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
+        const defs = parseDefinitions(kubectlSync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
         const schemas: SchemasByKind = {
-            components: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), descriptions: descs.components },
-            traits: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), descriptions: descs.traits },
-            policies: { schemas: this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), descriptions: descs.policies },
+            components: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
+            traits: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
+            policies: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
         };
         const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
         composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
@@ -352,11 +466,11 @@ export class VelaYamlSchemaProvider {
             try {
                 const appSchema = parseApplicationSchema(await kubectlAsync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
                 const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
-                const descs = parseDefinitionDescriptions(await kubectlAsync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
+                const defs = parseDefinitions(await kubectlAsync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
                 const schemas: SchemasByKind = {
-                    components: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), descriptions: descs.components },
-                    traits: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), descriptions: descs.traits },
-                    policies: { schemas: await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), descriptions: descs.policies },
+                    components: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
+                    traits: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
+                    policies: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
                 };
                 const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
                 composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
